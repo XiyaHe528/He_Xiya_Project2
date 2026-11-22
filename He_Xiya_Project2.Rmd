@@ -1,0 +1,215 @@
+---
+title: "Air Pollution in Durham County (2018–2020)"
+author: "Xiya He"
+date: "2026-11-22"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+## Project Overview
+
+This project uses EPA air pollution data from RDU airport for 2018, 2019, and January to April 2020.
+
+GitHub repository: [He_Xiya_Project2](https://github.com/XiyaHe528/He_Xiya_Project2)
+
+## Data Cleaning
+
+I removed duplicate rows and changed negative pollutant values to zero. I converted dates, averaged measurements from the same day, and combined the three years. The function can also convert O3 from ppm to ppb.
+
+```{r clean-function}
+# Purpose: Clean one year of air pollution data.
+# file_path: Path to the CSV file.
+# ozone_units: "ppm" (default) or "ppb".
+# Returns: A data frame with one row per day.
+
+clean_air_data <- function(file_path, ozone_units = "ppm") {
+
+  if (!(ozone_units %in% c("ppm", "ppb"))) {
+    stop("ozone_units must be ppm or ppb")
+  }
+
+  data <- read.csv(file_path, check.names = FALSE)
+
+  # Remove duplicate rows.
+  data <- unique(data)
+
+  # Rename pollutant columns.
+  names(data)[c(2, 4, 6)] <- c("CO", "PM25", "O3")
+
+  # Format the date.
+  data$Date <- as.Date(data$Date, format = "%m/%d/%Y")
+
+  # Change negative concentrations to zero.
+  for (p in c("CO", "PM25", "O3")) {
+    data[[p]][!is.na(data[[p]]) & data[[p]] < 0] <- 0
+  }
+
+  # Calculate the daily mean for each pollutant.
+  daily <- aggregate(
+    data[c("CO", "PM25", "O3")],
+    by = list(Date = data$Date),
+    FUN = function(x) {
+      if (all(is.na(x))) return(NA_real_)
+      mean(x, na.rm = TRUE)
+    }
+  )
+
+  # Convert O3 to ppb if requested.
+  if (ozone_units == "ppb") {
+    daily$O3 <- daily$O3 * 1000
+  }
+
+  return(daily)
+}
+```
+
+```{r combine-data, include=FALSE}
+# Clean the data for each year.
+air_2018 <- clean_air_data("data/AQ_2018.csv")
+air_2019 <- clean_air_data("data/AQ_2019.csv")
+air_2020 <- clean_air_data("data/AQ_2020.csv")
+
+# Combine the three years.
+air_all <- rbind(air_2018, air_2019, air_2020)
+``` 
+
+## Tables
+
+```{r table-2018}
+# Minimum and maximum values for 2018.
+pollutants <- c("CO", "PM25", "O3")
+
+table_2018 <- data.frame(
+  Pollutant = c("CO (ppm)", "PM2.5 (ug/m3)", "O3 (ppm)"),
+  Minimum = sprintf("%.3f", sapply(air_2018[pollutants], min, na.rm = TRUE)),
+  Maximum = sprintf("%.3f", sapply(air_2018[pollutants], max, na.rm = TRUE))
+)
+
+knitr::kable(table_2018,
+             caption = "Minimum and maximum daily concentrations in 2018",
+             row.names = FALSE)
+```
+
+```{r table-2019}
+# Minimum and maximum values for 2019.
+table_2019 <- data.frame(
+  Pollutant = c("CO (ppm)", "PM2.5 (ug/m3)", "O3 (ppm)"),
+  Minimum = sprintf("%.3f", sapply(air_2019[pollutants], min, na.rm = TRUE)),
+  Maximum = sprintf("%.3f", sapply(air_2019[pollutants], max, na.rm = TRUE))
+)
+
+knitr::kable(table_2019,
+             caption = "Minimum and maximum daily concentrations in 2019",
+             row.names = FALSE)
+```
+
+```{r table-2020}
+# Minimum and maximum values for 2020.
+table_2020 <- data.frame(
+  Pollutant = c("CO (ppm)", "PM2.5 (ug/m3)", "O3 (ppm)"),
+  Minimum = sprintf("%.3f", sapply(air_2020[pollutants], min, na.rm = TRUE)),
+  Maximum = sprintf("%.3f", sapply(air_2020[pollutants], max, na.rm = TRUE))
+)
+
+knitr::kable(table_2020,
+             caption = "Minimum and maximum daily concentrations in 2020 (Jan-Apr)",
+             row.names = FALSE)
+```
+
+## Plot 1: CO and O3 by Month
+
+```{r plot1-data, include=FALSE}
+monthly_data <- air_all %>%
+  mutate(Month = as.integer(format(Date, "%m"))) %>%
+  select(Month, CO, O3) %>%
+  pivot_longer(
+    cols = c(CO, O3),
+    names_to = "Pollutant",
+    values_to = "Concentration"
+  ) %>%
+  filter(!is.na(Concentration)) %>%
+  group_by(Month, Pollutant) %>%
+  summarise(
+    Mean = mean(Concentration),
+    SD = sd(Concentration),
+    N = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Lower = Mean - 1.96 * SD / sqrt(N),
+    Upper = Mean + 1.96 * SD / sqrt(N)
+  )
+```
+
+```{r plot1, fig.width=7, fig.height=4}
+ggplot(monthly_data, aes(x = Month, y = Mean, color = Pollutant)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = Lower, ymax = Upper), width = 0.2) +
+  facet_wrap(~Pollutant, scales = "free_y") +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  scale_color_manual(values = c(CO = "#0072B2", O3 = "#D55E00")) +
+  labs(
+    title = "Monthly CO and O3 Concentrations",
+    subtitle = "Pooled daily values from 2018–2020 with 95% confidence intervals",
+    x = "Month",
+    y = "Mean concentration (ppm)",
+    color = "Pollutant"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+I used separate panels because CO and O3 have different concentration scales. This makes both trends easier to see.
+
+## Plot 2: PM2.5 by Month and Year
+
+```{r plot2-data , include=FALSE}
+monthly_pm25 <- air_all %>%
+  mutate(
+    Year = format(Date, "%Y"),
+    Month = as.integer(format(Date, "%m"))
+  ) %>%
+  group_by(Year, Month) %>%
+  summarise(
+    Mean_PM25 = mean(PM25, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r plot2, fig.width=7, fig.height=4}
+ggplot(monthly_pm25, aes(x = Month, y = Mean_PM25, color = Year)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  scale_color_manual(values = c(
+    "2018" = "#0072B2",
+    "2019" = "#D55E00",
+    "2020" = "#009E73"
+  )) +
+  labs(
+    title = "Monthly PM2.5 Concentrations by Year",
+    subtitle = "2020 data include January to April only",
+    x = "Month",
+    y = "Mean PM2.5 (ug/m3)",
+    color = "Year"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+I used lines and points to show monthly changes in PM2.5 and to compare the three years.
+
+## Results Interpretation
+
+CO concentrations were generally higher in winter, while O3 concentrations were higher in warmer months. PM2.5 concentrations changed across months and years without a clear common pattern. The 2020 data only include January to April, so we cannot compare the full year with 2018 and 2019.
+
+## AI Use Statement
+
+I used ChatGPT for guidance on setting up my RStudio project environment and checking the results.
